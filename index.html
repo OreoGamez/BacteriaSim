@@ -1,0 +1,453 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Bacteria Sim</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body { background: #060e06; overflow: hidden; font-family: 'Courier New', monospace; }
+  #main { position: fixed; top: 0; left: 0; width: 100%; height: 100%; }
+  #graph { position: fixed; top: 12px; right: 12px; border: 1px solid rgba(77,255,145,0.3); background: rgba(4,10,4,0.85); border-radius: 4px; }
+  #hud {
+    position: fixed; top: 12px; left: 12px;
+    color: #4dff91; font-size: 12px; line-height: 1.7;
+    text-shadow: 0 0 8px rgba(77,255,145,0.5);
+    pointer-events: none; user-select: none;
+  }
+  #controls {
+    position: fixed; bottom: 22px; left: 50%; transform: translateX(-50%);
+    display: flex; gap: 8px; z-index: 5;
+  }
+  #controls button {
+    background: rgba(4,10,4,0.88);
+    border: 1px solid rgba(77,255,145,0.35);
+    color: #4dff91; font-family: 'Courier New', monospace;
+    font-size: 1rem; padding: 7px 20px; cursor: pointer;
+    border-radius: 3px; letter-spacing: 0.05em;
+    transition: background 0.15s, border-color 0.15s;
+    user-select: none;
+  }
+  #controls button:hover  { background: rgba(77,255,145,0.12); border-color: rgba(77,255,145,0.65); }
+  #controls button:active { background: rgba(77,255,145,0.22); }
+  #controls #btn-pause { min-width: 48px; }
+  #overlay {
+    position: fixed; inset: 0;
+    display: flex; flex-direction: column; align-items: center; justify-content: center;
+    background: rgba(6,14,6,0.92); color: #4dff91;
+    font-family: 'Courier New', monospace; text-align: center; gap: 18px; z-index: 10;
+  }
+  #overlay h1 { font-size: 2.2rem; letter-spacing: 0.15em; text-shadow: 0 0 20px #4dff91; }
+  #overlay p  { font-size: 0.95rem; opacity: 0.8; line-height: 1.8; }
+  #overlay .btn {
+    margin-top: 10px; padding: 10px 32px;
+    border: 1px solid #4dff91; color: #4dff91;
+    font-family: 'Courier New', monospace; font-size: 0.9rem;
+    background: transparent; cursor: pointer; letter-spacing: 0.1em;
+    transition: background 0.2s, color 0.2s;
+  }
+  #overlay .btn:hover { background: #4dff91; color: #060e06; }
+  #banner {
+    position: fixed; bottom: 72px; left: 50%; transform: translateX(-50%);
+    background: rgba(4,10,4,0.9); border: 1px solid rgba(77,255,145,0.4);
+    color: #4dff91; font-family: 'Courier New', monospace; font-size: 0.78rem;
+    padding: 10px 20px; border-radius: 4px; text-align: center;
+    max-width: 480px; display: none; pointer-events: none; line-height: 1.6;
+  }
+</style>
+</head>
+<body>
+
+<canvas id="main"></canvas>
+<canvas id="graph" width="230" height="150"></canvas>
+<div id="hud"></div>
+<div id="banner"></div>
+
+<div id="controls">
+  <button id="btn-back"  title="Rewind one generation (←)">◀◀</button>
+  <button id="btn-pause" title="Pause / resume (Space)">⏸</button>
+  <button id="btn-fwd"   title="Skip one generation (→)">▶▶</button>
+</div>
+
+<div id="overlay">
+  <h1>🦠 BACTERIA SIM</h1>
+  <p>Move your mouse to attract the colony.<br>Watch exponential growth unfold.</p>
+  <button class="btn">[ CLICK TO BEGIN ]</button>
+</div>
+
+<script>
+// ── Canvas & DOM ───────────────────────────────────────────────────────────────
+const canvas  = document.getElementById('main');
+const ctx     = canvas.getContext('2d');
+const gCvs    = document.getElementById('graph');
+const gCtx    = gCvs.getContext('2d');
+const hud     = document.getElementById('hud');
+const banner  = document.getElementById('banner');
+const overlay = document.getElementById('overlay');
+const btnBack  = document.getElementById('btn-back');
+const btnPause = document.getElementById('btn-pause');
+const btnFwd   = document.getElementById('btn-fwd');
+
+function resize() { canvas.width = innerWidth; canvas.height = innerHeight; }
+window.addEventListener('resize', resize);
+resize();
+
+const mouse = { x: innerWidth / 2, y: innerHeight / 2 };
+document.addEventListener('mousemove', e => { mouse.x = e.clientX; mouse.y = e.clientY; });
+
+// ── Simulation constants ───────────────────────────────────────────────────────
+const DOUBLE_SEC  = 3;
+const MAX_POP     = 8192;
+const REPULSE_MAX = 2000;  // above this: skip neighbour repulsion
+
+// ── State ──────────────────────────────────────────────────────────────────────
+let bacteria      = [];
+let doublingEvents = [];
+let simTime       = 0;
+let lastDoubleT   = 0;
+let generation    = 0;
+let running       = false;
+let paused        = false;
+let lastRealTime  = null;
+let bannerShown   = false;
+
+// ── Bacteria factory ───────────────────────────────────────────────────────────
+function makeBacterium(x, y) {
+  const hue = 135 + (Math.random() - 0.5) * 30;
+  return {
+    x, y,
+    vx: (Math.random() - 0.5) * 0.5,
+    vy: (Math.random() - 0.5) * 0.5,
+    angle: Math.random() * Math.PI * 2,
+    length: 6 + Math.random() * 2,
+    width:  2 + Math.random() * 0.8,
+    hue,
+    // Cache fill string so we never allocate a new one mid-frame
+    fillStyle: `hsla(${Math.round(hue)},75%,52%,0.72)`,
+    phase:  Math.random() * Math.PI * 2,
+    // Unique reserved slot in swarm disc — prevents stacking at high counts
+    swarmAngle: Math.random() * Math.PI * 2,
+    swarmNorm:  Math.sqrt(Math.random())   // sqrt → uniform disc distribution
+  };
+}
+
+// ── Spatial grid for O(n) repulsion ───────────────────────────────────────────
+const CELL = 16;
+function buildGrid() {
+  const grid = new Map();
+  bacteria.forEach((b, i) => {
+    const key = (Math.floor(b.x / CELL) + 4000) * 10000 + (Math.floor(b.y / CELL) + 4000);
+    if (!grid.has(key)) grid.set(key, []);
+    grid.get(key).push(i);
+  });
+  return grid;
+}
+function gridKey(bx, by) {
+  return (Math.floor(bx / CELL) + 4000) * 10000 + (Math.floor(by / CELL) + 4000);
+}
+
+// ── Doubling ───────────────────────────────────────────────────────────────────
+function doDoubling() {
+  if (bacteria.length >= MAX_POP) return;  // hard cap
+  const prev = bacteria.length;
+  const existing = bacteria.slice();
+  existing.forEach(b => {
+    if (bacteria.length < MAX_POP) {
+      const a = Math.random() * Math.PI * 2;
+      const d = 4 + Math.random() * 8;
+      bacteria.push(makeBacterium(b.x + Math.cos(a) * d, b.y + Math.sin(a) * d));
+    }
+  });
+  generation++;
+  lastDoubleT = simTime;
+  doublingEvents.push({ t: simTime, n: bacteria.length, prev });
+
+  if (bacteria.length >= 512 && !bannerShown) {
+    bannerShown = true;
+    banner.style.display = 'block';
+    banner.textContent =
+      `Colony hit ${bacteria.length}. Doubles every ${DOUBLE_SEC}s — that's 2^(t/3) growth.`;
+    setTimeout(() => { banner.style.display = 'none'; }, 5000);
+  }
+}
+
+// ── Time controls ──────────────────────────────────────────────────────────────
+function stepForward() {
+  doDoubling();
+}
+
+function stepBack() {
+  if (doublingEvents.length === 0) return;
+  const ev = doublingEvents.pop();
+  bacteria.splice(ev.prev);
+  generation  = Math.max(0, generation - 1);
+  simTime     = Math.max(0, ev.t - 0.01);
+  lastDoubleT = simTime;   // fresh countdown — prevents instant re-fire
+}
+
+function togglePause() {
+  paused = !paused;
+  btnPause.textContent = paused ? '▶' : '⏸';
+}
+
+// ── Physics update ─────────────────────────────────────────────────────────────
+function update(delta) {
+  simTime += delta;
+
+  // Fire as many doublings as sim-time demands (handles fast-forward)
+  while (simTime - lastDoubleT >= DOUBLE_SEC && bacteria.length < MAX_POP) {
+    doDoubling();
+  }
+  // If at cap, keep lastDoubleT marching so countdown doesn't drift
+  if (bacteria.length >= MAX_POP) lastDoubleT = simTime;
+
+  const useRepulsion = bacteria.length <= REPULSE_MAX;
+  const grid = useRepulsion ? buildGrid() : null;
+  const REPULSE_R   = 14;
+  const REPULSE_R2  = REPULSE_R * REPULSE_R;
+  const REPULSE_STR = 0.28;
+
+  // Swarm disc radius grows with sqrt(n) so colony fans out naturally
+  const swarmRadius = Math.max(28, Math.sqrt(bacteria.length) * 5.5);
+
+  bacteria.forEach((b, i) => {
+    b.phase += 0.08;
+
+    // Each bacterium targets its unique reserved spot in the swarm disc
+    const r  = b.swarmNorm * swarmRadius;
+    const tx = mouse.x + Math.cos(b.swarmAngle) * r;
+    const ty = mouse.y + Math.sin(b.swarmAngle) * r;
+    const dx = tx - b.x, dy = ty - b.y;
+    const dist = Math.sqrt(dx * dx + dy * dy) || 1;
+    const force = Math.min(dist * 0.010, 0.30);
+    b.vx += (dx / dist) * force;
+    b.vy += (dy / dist) * force;
+
+    // Neighbour repulsion via spatial grid
+    if (useRepulsion) {
+      const cx = Math.floor(b.x / CELL);
+      const cy = Math.floor(b.y / CELL);
+      for (let ox = -1; ox <= 1; ox++) {
+        for (let oy = -1; oy <= 1; oy++) {
+          const nb = grid.get((cx + ox + 4000) * 10000 + (cy + oy + 4000));
+          if (!nb) continue;
+          for (let k = 0; k < nb.length; k++) {
+            const j = nb[k];
+            if (j === i) continue;
+            const o  = bacteria[j];
+            const ex = b.x - o.x, ey = b.y - o.y;
+            const d2 = ex * ex + ey * ey;
+            if (d2 < REPULSE_R2 && d2 > 0) {
+              const d    = Math.sqrt(d2);
+              const push = REPULSE_STR * (1 - d / REPULSE_R);
+              b.vx += (ex / d) * push;
+              b.vy += (ey / d) * push;
+            }
+          }
+        }
+      }
+    }
+
+    // Swim jitter
+    b.vx += (Math.random() - 0.5) * 0.14;
+    b.vy += (Math.random() - 0.5) * 0.14;
+
+    // Dampen & cap speed
+    b.vx *= 0.88; b.vy *= 0.88;
+    const spd = Math.sqrt(b.vx * b.vx + b.vy * b.vy);
+    if (spd > 2.5) { b.vx = b.vx / spd * 2.5; b.vy = b.vy / spd * 2.5; }
+
+    b.x += b.vx; b.y += b.vy;
+    if (spd > 0.05) b.angle = Math.atan2(b.vy, b.vx);
+
+    if (b.x < -20) b.x = canvas.width  + 10;
+    if (b.x > canvas.width  + 20) b.x = -10;
+    if (b.y < -20) b.y = canvas.height + 10;
+    if (b.y > canvas.height + 20) b.y = -10;
+  });
+}
+
+// ── Draw ───────────────────────────────────────────────────────────────────────
+const TWO_PI = Math.PI * 2;
+
+function drawMain() {
+  // Trail fade
+  ctx.fillStyle = 'rgba(6,14,6,0.22)';
+  ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+  // Petri dish ring
+  ctx.beginPath();
+  ctx.arc(mouse.x, mouse.y, 150, 0, TWO_PI);
+  ctx.strokeStyle = 'rgba(77,255,145,0.07)';
+  ctx.lineWidth = 1.5;
+  ctx.stroke();
+
+  // ── One loop, same approach at every count — no batch-path artifacts ────────
+  // ctx.ellipse(x, y, rx, ry, rotation, ...) handles orientation directly,
+  // so no save/translate/rotate/restore needed per bacterium.
+  const showHighlights = bacteria.length <= 400;
+
+  bacteria.forEach(b => {
+    const len = b.length + Math.sin(b.phase) * 0.4;
+    const hw  = len / 2;
+
+    ctx.beginPath();
+    ctx.ellipse(b.x, b.y, hw, b.width / 2, b.angle, 0, TWO_PI);
+    ctx.fillStyle = b.fillStyle;
+    ctx.fill();
+
+    if (showHighlights) {
+      const cos = Math.cos(b.angle), sin = Math.sin(b.angle);
+      const ox  = -len * 0.1,  oy  = -b.width * 0.08;
+      ctx.beginPath();
+      ctx.ellipse(
+        b.x + cos * ox - sin * oy,
+        b.y + sin * ox + cos * oy,
+        len * 0.22, b.width * 0.18, b.angle, 0, TWO_PI
+      );
+      ctx.fillStyle = 'rgba(255,255,255,0.22)';
+      ctx.fill();
+    }
+  });
+
+  // Paused label
+  if (paused) {
+    ctx.fillStyle   = 'rgba(77,255,145,0.18)';
+    ctx.font        = 'bold 13px Courier New';
+    ctx.textAlign   = 'center';
+    ctx.fillText('PAUSED', canvas.width / 2, canvas.height / 2);
+    ctx.textAlign   = 'left';
+  }
+}
+
+// ── HUD ────────────────────────────────────────────────────────────────────────
+function updateHUD() {
+  const atCap    = bacteria.length >= MAX_POP;
+  const nextIn   = atCap ? 'MAX' : (DOUBLE_SEC - (simTime - lastDoubleT)).toFixed(1) + 's';
+  const capLabel = atCap ? ' ⚠ MAX' : '';
+  hud.innerHTML =
+    `<div>BACTERIA SIM${capLabel}</div>` +
+    `<div>Count:       ${bacteria.length.toLocaleString()}</div>` +
+    `<div>Generation:  ${generation}</div>` +
+    `<div>Elapsed:     ${simTime.toFixed(1)}s</div>` +
+    `<div>Next double: ${nextIn}</div>` +
+    `<div style="margin-top:6px;opacity:0.6">Formula: n(t) = 2^(t/3)</div>`;
+}
+
+// ── Graph ──────────────────────────────────────────────────────────────────────
+function drawGraph() {
+  const W = gCvs.width, H = gCvs.height;
+  const PAD = { top: 22, right: 10, bottom: 22, left: 42 };
+  gCtx.clearRect(0, 0, W, H);
+
+  gCtx.fillStyle = '#4dff91';
+  gCtx.font = '9px Courier New';
+  gCtx.textAlign = 'center';
+  gCtx.fillText('n(t) = n₀ · 2^(t/T)', W / 2, 12);
+
+  const cW = W - PAD.left - PAD.right;
+  const cH = H - PAD.top  - PAD.bottom;
+  const maxT = Math.max(simTime + 1, 10);
+  const maxN = Math.max(bacteria.length * 1.1, 8);
+
+  const gx = t => PAD.left + (t / maxT) * cW;
+  const gy = n => PAD.top  + cH - (Math.min(n, maxN) / maxN) * cH;
+
+  // Axes
+  gCtx.strokeStyle = 'rgba(77,255,145,0.3)';
+  gCtx.lineWidth = 1;
+  gCtx.beginPath();
+  gCtx.moveTo(PAD.left, PAD.top);
+  gCtx.lineTo(PAD.left, PAD.top + cH);
+  gCtx.lineTo(PAD.left + cW, PAD.top + cH);
+  gCtx.stroke();
+
+  // Labels
+  gCtx.fillStyle = 'rgba(77,255,145,0.55)';
+  gCtx.font = '8px Courier New';
+  gCtx.textAlign = 'right';
+  const topLabel = maxN >= 1000 ? (maxN / 1000).toFixed(1) + 'k' : Math.round(maxN);
+  gCtx.fillText(topLabel, PAD.left - 2, PAD.top + 4);
+  gCtx.fillText('0', PAD.left - 2, PAD.top + cH + 3);
+  gCtx.textAlign = 'left';
+  gCtx.fillText('0', PAD.left, PAD.top + cH + 12);
+  gCtx.textAlign = 'right';
+  gCtx.fillText(Math.round(maxT) + 's', PAD.left + cW, PAD.top + cH + 12);
+
+  // Dashed theoretical curve
+  gCtx.beginPath();
+  gCtx.setLineDash([3, 3]);
+  gCtx.strokeStyle = 'rgba(77,255,145,0.35)';
+  gCtx.lineWidth = 1;
+  for (let i = 0; i <= 60; i++) {
+    const t = (i / 60) * maxT;
+    const n = Math.pow(2, t / DOUBLE_SEC);
+    i === 0 ? gCtx.moveTo(gx(t), gy(n)) : gCtx.lineTo(gx(t), gy(n));
+  }
+  gCtx.stroke();
+  gCtx.setLineDash([]);
+
+  // Actual step function
+  if (doublingEvents.length > 0) {
+    gCtx.beginPath();
+    gCtx.strokeStyle = '#4dff91';
+    gCtx.lineWidth = 1.5;
+    gCtx.moveTo(gx(0), gy(1));
+    let prevN = 1;
+    doublingEvents.forEach(ev => {
+      gCtx.lineTo(gx(ev.t), gy(prevN));
+      gCtx.lineTo(gx(ev.t), gy(ev.n));
+      prevN = ev.n;
+    });
+    gCtx.lineTo(gx(simTime), gy(prevN));
+    gCtx.stroke();
+
+    doublingEvents.forEach(ev => {
+      gCtx.beginPath();
+      gCtx.arc(gx(ev.t), gy(ev.n), 2.5, 0, TWO_PI);
+      gCtx.fillStyle = '#4dff91';
+      gCtx.fill();
+    });
+  }
+}
+
+// ── Loop ───────────────────────────────────────────────────────────────────────
+function loop(now) {
+  if (!running) return;
+  const delta = lastRealTime !== null ? (now - lastRealTime) / 1000 : 0;
+  lastRealTime = now;
+  if (!paused) update(delta);
+  drawMain();
+  drawGraph();
+  updateHUD();
+  requestAnimationFrame(loop);
+}
+
+// ── Controls ───────────────────────────────────────────────────────────────────
+btnBack.addEventListener('click',  stepBack);
+btnPause.addEventListener('click', togglePause);
+btnFwd.addEventListener('click',   stepForward);
+
+document.addEventListener('keydown', e => {
+  if (!running) return;
+  if (e.key === 'ArrowLeft')  { e.preventDefault(); stepBack(); }
+  if (e.key === 'ArrowRight') { e.preventDefault(); stepForward(); }
+  if (e.key === ' ')          { e.preventDefault(); togglePause(); }
+});
+
+// ── Start ──────────────────────────────────────────────────────────────────────
+overlay.addEventListener('click', () => {
+  overlay.style.display = 'none';
+  bacteria       = [makeBacterium(innerWidth / 2, innerHeight / 2)];
+  doublingEvents = [];
+  simTime        = 0;
+  lastDoubleT    = 0;
+  generation     = 0;
+  lastRealTime   = null;
+  paused         = false;
+  running        = true;
+  requestAnimationFrame(loop);
+});
+</script>
+</body>
+</html>
