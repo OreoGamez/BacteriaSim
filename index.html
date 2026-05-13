@@ -129,6 +129,7 @@ const REPULSE_MAX = 2000;  // above this: skip neighbour repulsion
 // ── State ──────────────────────────────────────────────────────────────────────
 let bacteria      = [];
 let doublingEvents = [];
+let shockwaves    = [];   // { x, y, r, alpha } — expanding rings on doubling
 let simTime       = 0;
 let lastDoubleT   = 0;
 let generation    = 0;
@@ -170,6 +171,15 @@ function gridKey(bx, by) {
   return (Math.floor(bx / CELL) + 4000) * 10000 + (Math.floor(by / CELL) + 4000);
 }
 
+// ── Shockwave helper ──────────────────────────────────────────────────────────
+function spawnShockwave() {
+  // Sample up to 32 bacteria to estimate swarm centre (fast at any n)
+  const step = Math.max(1, Math.floor(bacteria.length / 32));
+  let sx = 0, sy = 0, ct = 0;
+  for (let i = 0; i < bacteria.length; i += step) { sx += bacteria[i].x; sy += bacteria[i].y; ct++; }
+  shockwaves.push({ x: sx / ct, y: sy / ct, r: 8, alpha: 0.85 });
+}
+
 // ── Doubling ───────────────────────────────────────────────────────────────────
 function doDoubling() {
   if (bacteria.length >= MAX_POP) return;  // hard cap
@@ -185,6 +195,7 @@ function doDoubling() {
   generation++;
   lastDoubleT = simTime;
   doublingEvents.push({ t: simTime, n: bacteria.length, prev });
+  spawnShockwave();
 
   if (bacteria.length >= 512 && !bannerShown) {
     bannerShown = true;
@@ -299,12 +310,15 @@ function drawMain() {
   ctx.fillStyle = 'rgba(6,14,6,0.22)';
   ctx.fillRect(0, 0, canvas.width, canvas.height);
 
-  // Petri dish ring
+  // ── Mouse glow ────────────────────────────────────────────────────────────────
+  const mg = ctx.createRadialGradient(mouse.x, mouse.y, 0, mouse.x, mouse.y, 55);
+  mg.addColorStop(0,   'rgba(120,255,170,0.13)');
+  mg.addColorStop(0.35,'rgba(77,255,145,0.06)');
+  mg.addColorStop(1,   'rgba(0,0,0,0)');
+  ctx.fillStyle = mg;
   ctx.beginPath();
-  ctx.arc(mouse.x, mouse.y, 150, 0, TWO_PI);
-  ctx.strokeStyle = 'rgba(77,255,145,0.07)';
-  ctx.lineWidth = 1.5;
-  ctx.stroke();
+  ctx.arc(mouse.x, mouse.y, 55, 0, TWO_PI);
+  ctx.fill();
 
   // ── One draw per bacterium — same approach at every count ────────────────────
   const showHighlights = bacteria.length <= 400;
@@ -329,6 +343,24 @@ function drawMain() {
       ctx.fillStyle = 'rgba(255,255,255,0.22)';
       ctx.fill();
     }
+  });
+
+  // ── Shockwave rings ───────────────────────────────────────────────────────────
+  shockwaves = shockwaves.filter(s => s.alpha > 0.01);
+  shockwaves.forEach(s => {
+    s.r     += 4.5;
+    s.alpha *= 0.93;
+    ctx.beginPath();
+    ctx.arc(s.x, s.y, s.r, 0, TWO_PI);
+    ctx.strokeStyle = `rgba(77,255,145,${(s.alpha * 0.75).toFixed(3)})`;
+    ctx.lineWidth = 2;
+    ctx.stroke();
+    // Second fainter trailing ring
+    ctx.beginPath();
+    ctx.arc(s.x, s.y, s.r * 0.55, 0, TWO_PI);
+    ctx.strokeStyle = `rgba(77,255,145,${(s.alpha * 0.3).toFixed(3)})`;
+    ctx.lineWidth = 1;
+    ctx.stroke();
   });
 
   // Paused label
@@ -407,6 +439,7 @@ overlay.addEventListener('click', () => {
   generation     = 0;
   lastRealTime   = null;
   paused         = false;
+  shockwaves     = [];
   lastTableLen   = -1;
   tblBody.innerHTML = '';
   running        = true;
