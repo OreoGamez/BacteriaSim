@@ -8,7 +8,28 @@
   * { margin: 0; padding: 0; box-sizing: border-box; }
   body { background: #060e06; overflow: hidden; font-family: 'Courier New', monospace; }
   #main { position: fixed; top: 0; left: 0; width: 100%; height: 100%; }
-  #graph { position: fixed; top: 12px; right: 12px; border: 1px solid rgba(77,255,145,0.3); background: rgba(4,10,4,0.85); border-radius: 4px; }
+  #datatbl {
+    position: fixed; top: 12px; right: 12px;
+    background: rgba(4,10,4,0.88); border: 1px solid rgba(77,255,145,0.3);
+    border-radius: 4px; padding: 10px 14px;
+    color: #4dff91; font-size: 11px; font-family: 'Courier New', monospace;
+    max-height: 80vh; overflow-y: auto; pointer-events: none; user-select: none;
+    min-width: 160px;
+  }
+  #datatbl .tbl-title {
+    text-align: center; margin-bottom: 7px;
+    font-size: 10px; opacity: 0.7; letter-spacing: 0.08em;
+  }
+  #datatbl table { border-collapse: collapse; width: 100%; }
+  #datatbl th {
+    border-bottom: 1px solid rgba(77,255,145,0.3);
+    padding: 2px 10px 5px; text-align: right; opacity: 0.6;
+    font-weight: normal; letter-spacing: 0.05em;
+  }
+  #datatbl th:first-child { text-align: left; }
+  #datatbl td { padding: 3px 10px; text-align: right; }
+  #datatbl td:first-child { text-align: left; opacity: 0.7; }
+  #datatbl tr.latest td { color: #fff; }
   #hud {
     position: fixed; top: 12px; left: 12px;
     color: #4dff91; font-size: 12px; line-height: 1.7;
@@ -59,7 +80,13 @@
 <body>
 
 <canvas id="main"></canvas>
-<canvas id="graph" width="230" height="150"></canvas>
+<div id="datatbl">
+  <div class="tbl-title">n(t) = 2^(t/3)</div>
+  <table>
+    <thead><tr><th>TIME</th><th>BACTERIA</th></tr></thead>
+    <tbody id="tbl-body"></tbody>
+  </table>
+</div>
 <div id="hud"></div>
 <div id="banner"></div>
 
@@ -77,11 +104,10 @@
 
 <script>
 // ── Canvas & DOM ───────────────────────────────────────────────────────────────
-const canvas  = document.getElementById('main');
-const ctx     = canvas.getContext('2d');
-const gCvs    = document.getElementById('graph');
-const gCtx    = gCvs.getContext('2d');
-const hud     = document.getElementById('hud');
+const canvas   = document.getElementById('main');
+const ctx      = canvas.getContext('2d');
+const tblBody  = document.getElementById('tbl-body');
+const hud      = document.getElementById('hud');
 const banner  = document.getElementById('banner');
 const overlay = document.getElementById('overlay');
 const btnBack  = document.getElementById('btn-back');
@@ -122,12 +148,10 @@ function makeBacterium(x, y) {
     length: 6 + Math.random() * 2,
     width:  2 + Math.random() * 0.8,
     hue,
-    // Cache fill string so we never allocate a new one mid-frame
     fillStyle: `hsla(${Math.round(hue)},75%,52%,0.72)`,
-    phase:  Math.random() * Math.PI * 2,
-    // Unique reserved slot in swarm disc — prevents stacking at high counts
+    phase:      Math.random() * Math.PI * 2,
     swarmAngle: Math.random() * Math.PI * 2,
-    swarmNorm:  Math.sqrt(Math.random())   // sqrt → uniform disc distribution
+    swarmNorm:  Math.sqrt(Math.random())
   };
 }
 
@@ -282,23 +306,20 @@ function drawMain() {
   ctx.lineWidth = 1.5;
   ctx.stroke();
 
-  // ── One loop, same approach at every count — no batch-path artifacts ────────
-  // ctx.ellipse(x, y, rx, ry, rotation, ...) handles orientation directly,
-  // so no save/translate/rotate/restore needed per bacterium.
+  // ── One draw per bacterium — same approach at every count ────────────────────
   const showHighlights = bacteria.length <= 400;
 
   bacteria.forEach(b => {
     const len = b.length + Math.sin(b.phase) * 0.4;
-    const hw  = len / 2;
 
     ctx.beginPath();
-    ctx.ellipse(b.x, b.y, hw, b.width / 2, b.angle, 0, TWO_PI);
+    ctx.ellipse(b.x, b.y, len / 2, b.width / 2, b.angle, 0, TWO_PI);
     ctx.fillStyle = b.fillStyle;
     ctx.fill();
 
     if (showHighlights) {
       const cos = Math.cos(b.angle), sin = Math.sin(b.angle);
-      const ox  = -len * 0.1,  oy  = -b.width * 0.08;
+      const ox  = -len * 0.1, oy = -b.width * 0.08;
       ctx.beginPath();
       ctx.ellipse(
         b.x + cos * ox - sin * oy,
@@ -334,81 +355,22 @@ function updateHUD() {
     `<div style="margin-top:6px;opacity:0.6">Formula: n(t) = 2^(t/3)</div>`;
 }
 
-// ── Graph ──────────────────────────────────────────────────────────────────────
-function drawGraph() {
-  const W = gCvs.width, H = gCvs.height;
-  const PAD = { top: 22, right: 10, bottom: 22, left: 42 };
-  gCtx.clearRect(0, 0, W, H);
+// ── Table — only rebuilds when a doubling happens ─────────────────────────────
+let lastTableLen = -1;
+function updateTable() {
+  if (doublingEvents.length === lastTableLen) return; // nothing changed
+  lastTableLen = doublingEvents.length;
 
-  gCtx.fillStyle = '#4dff91';
-  gCtx.font = '9px Courier New';
-  gCtx.textAlign = 'center';
-  gCtx.fillText('n(t) = n₀ · 2^(t/T)', W / 2, 12);
-
-  const cW = W - PAD.left - PAD.right;
-  const cH = H - PAD.top  - PAD.bottom;
-  const maxT = Math.max(simTime + 1, 10);
-  const maxN = Math.max(bacteria.length * 1.1, 8);
-
-  const gx = t => PAD.left + (t / maxT) * cW;
-  const gy = n => PAD.top  + cH - (Math.min(n, maxN) / maxN) * cH;
-
-  // Axes
-  gCtx.strokeStyle = 'rgba(77,255,145,0.3)';
-  gCtx.lineWidth = 1;
-  gCtx.beginPath();
-  gCtx.moveTo(PAD.left, PAD.top);
-  gCtx.lineTo(PAD.left, PAD.top + cH);
-  gCtx.lineTo(PAD.left + cW, PAD.top + cH);
-  gCtx.stroke();
-
-  // Labels
-  gCtx.fillStyle = 'rgba(77,255,145,0.55)';
-  gCtx.font = '8px Courier New';
-  gCtx.textAlign = 'right';
-  const topLabel = maxN >= 1000 ? (maxN / 1000).toFixed(1) + 'k' : Math.round(maxN);
-  gCtx.fillText(topLabel, PAD.left - 2, PAD.top + 4);
-  gCtx.fillText('0', PAD.left - 2, PAD.top + cH + 3);
-  gCtx.textAlign = 'left';
-  gCtx.fillText('0', PAD.left, PAD.top + cH + 12);
-  gCtx.textAlign = 'right';
-  gCtx.fillText(Math.round(maxT) + 's', PAD.left + cW, PAD.top + cH + 12);
-
-  // Dashed theoretical curve
-  gCtx.beginPath();
-  gCtx.setLineDash([3, 3]);
-  gCtx.strokeStyle = 'rgba(77,255,145,0.35)';
-  gCtx.lineWidth = 1;
-  for (let i = 0; i <= 60; i++) {
-    const t = (i / 60) * maxT;
-    const n = Math.pow(2, t / DOUBLE_SEC);
-    i === 0 ? gCtx.moveTo(gx(t), gy(n)) : gCtx.lineTo(gx(t), gy(n));
-  }
-  gCtx.stroke();
-  gCtx.setLineDash([]);
-
-  // Actual step function
-  if (doublingEvents.length > 0) {
-    gCtx.beginPath();
-    gCtx.strokeStyle = '#4dff91';
-    gCtx.lineWidth = 1.5;
-    gCtx.moveTo(gx(0), gy(1));
-    let prevN = 1;
-    doublingEvents.forEach(ev => {
-      gCtx.lineTo(gx(ev.t), gy(prevN));
-      gCtx.lineTo(gx(ev.t), gy(ev.n));
-      prevN = ev.n;
-    });
-    gCtx.lineTo(gx(simTime), gy(prevN));
-    gCtx.stroke();
-
-    doublingEvents.forEach(ev => {
-      gCtx.beginPath();
-      gCtx.arc(gx(ev.t), gy(ev.n), 2.5, 0, TWO_PI);
-      gCtx.fillStyle = '#4dff91';
-      gCtx.fill();
-    });
-  }
+  let html = `<tr><td>0.0s</td><td>1</td></tr>`;
+  doublingEvents.forEach((ev, i) => {
+    const latest = i === doublingEvents.length - 1;
+    html += `<tr${latest ? ' class="latest"' : ''}>` +
+            `<td>${ev.t.toFixed(1)}s</td>` +
+            `<td>${ev.n.toLocaleString()}</td></tr>`;
+  });
+  tblBody.innerHTML = html;
+  // Scroll to bottom so latest row is always visible
+  tblBody.parentElement.parentElement.scrollTop = 9999;
 }
 
 // ── Loop ───────────────────────────────────────────────────────────────────────
@@ -418,7 +380,7 @@ function loop(now) {
   lastRealTime = now;
   if (!paused) update(delta);
   drawMain();
-  drawGraph();
+  updateTable();
   updateHUD();
   requestAnimationFrame(loop);
 }
@@ -445,6 +407,8 @@ overlay.addEventListener('click', () => {
   generation     = 0;
   lastRealTime   = null;
   paused         = false;
+  lastTableLen   = -1;
+  tblBody.innerHTML = '';
   running        = true;
   requestAnimationFrame(loop);
 });
