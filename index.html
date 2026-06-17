@@ -53,19 +53,40 @@
   #controls button:active { background: rgba(77,255,145,0.22); }
   #controls #btn-pause { min-width: 48px; }
   #overlay {
-    position: fixed; inset: 0;
+    position: fixed; inset: 0; overflow-y: auto;
     display: flex; flex-direction: column; align-items: center; justify-content: center;
-    background: rgba(6,14,6,0.92); color: #4dff91;
-    font-family: 'Courier New', monospace; text-align: center; gap: 18px; z-index: 10;
+    background: rgba(6,14,6,0.96); color: #4dff91;
+    font-family: 'Courier New', monospace; text-align: center; gap: 0; z-index: 10;
+    padding: 40px 20px;
   }
-  #overlay h1 { font-size: 2.2rem; letter-spacing: 0.15em; text-shadow: 0 0 20px #4dff91; }
-  #overlay p  { font-size: 0.95rem; opacity: 0.8; line-height: 1.8; }
+  #overlay h1 { font-size: 2.2rem; letter-spacing: 0.15em; text-shadow: 0 0 20px #4dff91; margin-bottom: 6px; }
+  #overlay .subtitle { font-size: 0.8rem; opacity: 0.45; letter-spacing: 0.2em; margin-bottom: 32px; }
+  #overlay .cards {
+    display: flex; gap: 16px; flex-wrap: wrap; justify-content: center;
+    max-width: 820px; margin-bottom: 28px;
+  }
+  #overlay .card {
+    background: rgba(77,255,145,0.04); border: 1px solid rgba(77,255,145,0.18);
+    border-radius: 6px; padding: 18px 22px; text-align: left;
+    flex: 1; min-width: 200px; max-width: 240px;
+  }
+  #overlay .card h3 { font-size: 0.75rem; letter-spacing: 0.12em; margin-bottom: 10px; opacity: 0.6; }
+  #overlay .card p, #overlay .card li { font-size: 0.82rem; opacity: 0.8; line-height: 1.9; }
+  #overlay .card ul { list-style: none; padding: 0; }
+  #overlay .card li::before { content: '› '; opacity: 0.5; }
+  #overlay .math-box {
+    background: rgba(77,255,145,0.05); border: 1px solid rgba(77,255,145,0.2);
+    border-radius: 6px; padding: 16px 32px; margin-bottom: 28px;
+    max-width: 480px; width: 100%;
+  }
+  #overlay .math-box .formula { font-size: 1.3rem; letter-spacing: 0.05em; margin-bottom: 8px; }
+  #overlay .math-box p { font-size: 0.78rem; opacity: 0.6; line-height: 1.8; }
   #overlay .btn {
-    margin-top: 10px; padding: 10px 32px;
+    margin-top: 4px; padding: 12px 44px;
     border: 1px solid #4dff91; color: #4dff91;
-    font-family: 'Courier New', monospace; font-size: 0.9rem;
-    background: transparent; cursor: pointer; letter-spacing: 0.1em;
-    transition: background 0.2s, color 0.2s;
+    font-family: 'Courier New', monospace; font-size: 0.95rem;
+    background: transparent; cursor: pointer; letter-spacing: 0.12em;
+    transition: background 0.2s, color 0.2s; border-radius: 3px;
   }
   #overlay .btn:hover { background: #4dff91; color: #060e06; }
   #banner {
@@ -98,7 +119,36 @@
 
 <div id="overlay">
   <h1>🦠 BACTERIA SIM</h1>
-  <p>Move your mouse to attract the colony.<br>Watch exponential growth unfold.</p>
+  <div class="subtitle">EXPONENTIAL GROWTH VISUALIZER</div>
+
+  <div class="cards">
+    <div class="card">
+      <h3>WHAT IS THIS?</h3>
+      <p>This is  live simulation of bacterial growth. starting from a single cell, the colony doubles every 3 seconds, just like real bacteria dividing in ideal conditions.</p>
+    </div>
+    <div class="card">
+      <h3>THE MATH</h3>
+      <p>Exponential growth means each doubling multiplies the total. Just after 13 doublings (39 seconds) You reach 8,192 bacteria from the original  1. The growth isn't added, it's multiplied.</p>
+    </div>
+    <div class="card">
+      <h3>HOW TO PLAY</h3>
+      <ul>
+        <li>Move mouse to attract the colony</li>
+        <li>◀◀ / ▶▶ to step generations</li>
+        <li>⏸ or Space to pause</li>
+        <li>Watch the table track each doubling</li>
+      </ul>
+    </div>
+  </div>
+
+  <div class="math-box">
+    <div class="formula">n(t) = 2^(t / T)</div>
+    <p>
+      n(t) = population at time t &nbsp;·&nbsp; T = doubling time (3s) &nbsp;·&nbsp; t = elapsed seconds<br>
+      At t = 9s → 2^3 = 8 bacteria &nbsp;·&nbsp; At t = 30s → 2^10 = 1,024 bacteria
+    </p>
+  </div>
+
   <button class="btn">[ CLICK TO BEGIN ]</button>
 </div>
 
